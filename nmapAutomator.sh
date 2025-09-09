@@ -8,10 +8,11 @@
 #   - Wordlists/files: users.txt, passwords.txt, /usr/share/wordlists/metasploit/unix_users.txt, /usr/share/onesixtyone/names, accounts/accounts-multiple.txt
 #   - Set MAX_PING_JOBS env var to control ping parallelism (default: 25)
 
-# Check for required tools and wordlists, warn if missing
+# Check for required tools and wordlists, warn if missing, and offer to install tools
 REQUIRED_TOOLS="nmap host awk sed grep sort uniq cut tee cat printf mkdir cd rm sleep stty jobs wait expr"
 RECON_TOOLS="smtp-user-enum swaks dnsrecon dig fierce sslscan nikto whatweb wafw00f ffuf gobuster joomscan wpscan droopescan snmp-check snmpwalk onesixtyone ldapsearch smbmap smbclient crackmapexec enum4linux hydra showmount odat NetExec sqsh"
 REQUIRED_WORDLISTS="users.txt passwords.txt /usr/share/wordlists/metasploit/unix_users.txt /usr/share/onesixtyone/names accounts/accounts-multiple.txt"
+ROCKYOU_PATH="/usr/share/wordlists/rockyou.txt"
 check_requirements() {
         missingTools=""
         for tool in ${REQUIRED_TOOLS} ${RECON_TOOLS}; do
@@ -21,6 +22,14 @@ check_requirements() {
         done
         if [ -n "$missingTools" ]; then
                 printf "${YELLOW}Warning: The following tools are missing and some recon/scans may not work: ${NC}${missingTools}\n"
+                printf "${YELLOW}Would you like to attempt to install them now? [Y/n] ${NC}"
+                read installAns
+                if [ "${installAns}" = "Y" ] || [ "${installAns}" = "y" ] || [ -z "${installAns}" ]; then
+                        for tool in $missingTools; do
+                                printf "${YELLOW}Installing ${tool}...${NC}\n"
+                                sudo apt-get install -y "$tool"
+                        done
+                fi
         fi
         missingWordlists=""
         for wordlist in ${REQUIRED_WORDLISTS}; do
@@ -30,6 +39,57 @@ check_requirements() {
         done
         if [ -n "$missingWordlists" ]; then
                 printf "${YELLOW}Warning: The following wordlists/files are missing and some recon commands may fail: ${NC}${missingWordlists}\n"
+                printf "${YELLOW}Would you like to attempt to download missing wordlists? [Y/n] ${NC}"
+                read downloadAns
+                if [ "${downloadAns}" = "Y" ] || [ "${downloadAns}" = "y" ] || [ -z "${downloadAns}" ]; then
+                        for wordlist in $missingWordlists; do
+                                # Determine download URL and target directory
+                                case "$wordlist" in
+                                        users.txt)
+                                                url="https://raw.githubusercontent.com/danielmiessler/SecLists/master/Usernames/top-usernames-shortlist.txt"
+                                                ;;
+                                        passwords.txt)
+                                                url="https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/10k-most-common.txt"
+                                                ;;
+                                        /usr/share/wordlists/metasploit/unix_users.txt)
+                                                url="https://raw.githubusercontent.com/rapid7/metasploit-framework/master/data/wordlists/unix_users.txt"
+                                                ;;
+                                        /usr/share/onesixtyone/names)
+                                                url="https://raw.githubusercontent.com/trailofbits/onesixtyone/master/names"
+                                                ;;
+                                        accounts/accounts-multiple.txt)
+                                                url="https://raw.githubusercontent.com/NetSPI/PowerUpSQL/master/data/accounts-multiple.txt"
+                                                ;;
+                                        *)
+                                                url=""
+                                                ;;
+                                esac
+                                if [ -n "$url" ]; then
+                                        dir="$(dirname "$wordlist")"
+                                        [ ! -d "$dir" ] && mkdir -p "$dir"
+                                        printf "${YELLOW}Downloading $wordlist...${NC}\n"
+                                        if command -v curl >/dev/null 2>&1; then
+                                                curl -fsSL "$url" -o "$wordlist"
+                                        elif command -v wget >/dev/null 2>&1; then
+                                                wget -q "$url" -O "$wordlist"
+                                        else
+                                                printf "${RED}Neither curl nor wget found. Cannot download $wordlist.${NC}\n"
+                                        fi
+                                else
+                                        printf "${RED}No download URL for $wordlist. Please add it manually.${NC}\n"
+                                fi
+                        done
+                fi
+        fi
+
+        # Use rockyou.txt as default for users.txt and passwords.txt if not present
+        if [ ! -f users.txt ] && [ -f "${ROCKYOU_PATH}" ]; then
+                ln -s "${ROCKYOU_PATH}" users.txt
+                printf "${YELLOW}Linked ${ROCKYOU_PATH} as users.txt${NC}\n"
+        fi
+        if [ ! -f passwords.txt ] && [ -f "${ROCKYOU_PATH}" ]; then
+                ln -s "${ROCKYOU_PATH}" passwords.txt
+                printf "${YELLOW}Linked ${ROCKYOU_PATH} as passwords.txt${NC}\n"
         fi
 }
 check_requirements
