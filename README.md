@@ -7,7 +7,7 @@ A script you can run in the background!
 ## Summary
 
 The main goal for this script is to automate the process of enumeration & recon that is run every time, and instead focus our attention on real pentesting.  
-  
+
 This will ensure two things:  
 1. Automate nmap scans. 
 2. Always have some recon running in the background. 
@@ -28,9 +28,12 @@ Once initial ports are found '*in 5-10 seconds*', we can start manually looking 
 
 *Note: This is a reconnaissance tool, and it does not perform any exploitation.*
 
-### Automatic Recon
+### Automatic Recon & Tool Checks
 With the `recon` option, nmapAutomator will automatically recommend and run the best recon tools for each found port.  
-If a recommended tool is missing from your machine, nmapAutomator will suggest how to install it.
+If a recommended tool or required wordlist is missing from your machine, nmapAutomator will warn you at startup and suggest how to install it. Missing recon commands will be skipped.
+
+### In-Depth Enumeration
+Recon recommendations now include many more tools and protocols, including NetExec for SMB, SSH, LDAP, FTP, WMI, WINRM, RDP, VNC, MSSQL, and NFS. The script also checks for the presence of all these tools and required wordlists before running.
 
 ### Runs on any shell
 nmapAutomator is 100% POSIX compatible, so it can run on any `sh` shell, and on any unix-based machine (*even a 10 YO router!*), which makes nmapAutomator ideal for lateral movement recon.
@@ -47,34 +50,47 @@ Remote Mode is still under development. Only following scans currently work with
 - [ ] Recon Scan
 
 ### Output
-nmapAutomator saves the output of each type of scan is saved into a separate file, under the output directory.  
+nmapAutomator saves the output of each type of scan into a separate file, under the output directory.  
 The entire script output is also saved, which you can view with `less -r outputDir/nmapAutomator_host_type.txt`, or you can simply `cat` it.
 
 -----
   
 ## Requirements:
-[ffuf](https://github.com/ffuf/ffuf), which we can install with:
+
+nmapAutomator will check for all required tools and wordlists at startup and warn you if any are missing. Recon commands for missing tools will be skipped.
+
+**Core tools:**
+- nmap, host, awk, sed, grep, sort, uniq, cut, tee, cat, printf, mkdir, cd, rm, sleep, stty, jobs, wait, expr
+
+**Recon tools:**
+- smtp-user-enum, swaks, dnsrecon, dig, fierce, sslscan, nikto, whatweb, wafw00f, ffuf, gobuster, joomscan, wpscan, droopescan, snmp-check, snmpwalk, onesixtyone, ldapsearch, smbmap, smbclient, crackmapexec, enum4linux, hydra, showmount, odat, NetExec, sqsh
+
+**Wordlists/files:**
+- users.txt, passwords.txt, /usr/share/wordlists/metasploit/unix_users.txt, /usr/share/onesixtyone/names, accounts/accounts-multiple.txt
+
+*If any recon recommended tools or wordlists are missing, you will be warned at startup and the relevant recon commands will be skipped.*
+
+**To install ffuf:**
 ```bash
 sudo apt update
 sudo apt install ffuf -y
 ```
 
-Or [Gobuster](https://github.com/OJ/gobuster) '*v3.0 or higher*', which we can install with:  
+**Or Gobuster (v3.0 or higher):**
 ```bash
 sudo apt update
 sudo apt install gobuster -y
 ```
 
-Other recon tools used within the script include:
+**Other recon tools used within the script include:**
 |[nmap Vulners](https://github.com/vulnersCom/nmap-vulners)|[sslscan](https://github.com/rbsec/sslscan)|[nikto](https://github.com/sullo/nikto)|[joomscan](https://github.com/rezasp/joomscan)|[wpscan](https://github.com/wpscanteam/wpscan)|
 |:-:|:-:|:-:|:-:|:-:|
 |[droopescan](https://github.com/droope/droopescan)|[smbmap](https://github.com/ShawnDEvans/smbmap)|[enum4linux](https://github.com/portcullislabs/enum4linux)|[dnsrecon](https://github.com/darkoperator/dnsrecon)|[odat](https://github.com/quentinhardy/odat)|
-|[smtp-user-enum](https://github.com/pentestmonkey/smtp-user-enum)|snmp-check|snmpwalk|ldapsearch||
+|[smtp-user-enum](https://github.com/pentestmonkey/smtp-user-enum)|snmp-check|snmpwalk|ldapsearch|[NetExec](https://github.com/Pennyw0rth/NetExec)|
 
-  
 Most of these should be installed by default in [Parrot OS](https://www.parrotsec.org) and [Kali Linux](https://www.kali.org).  
-*If any recon recommended tools are found to be missing, they will be automatically omitted, and the user will be notified.*
-  
+*If any recon recommended tools or wordlists are found to be missing, they will be automatically omitted, and the user will be notified.*
+
 ## Installation:
 ```bash
 git clone https://github.com/21y4d/nmapAutomator.git
@@ -110,6 +126,12 @@ Scan Types:
 
 ------
 
+## Additional Features
+- Checks for all required tools and wordlists at startup and warns if any are missing.
+- Configurable parallelism for ping jobs via `MAX_PING_JOBS` environment variable (default: 25).
+- Checks exit codes for nmap and recon tools, warning if a scan fails.
+- Recon recommendations now include NetExec and many more protocols.
+
 ## Upcoming Features
 - [x] Support URL/DNS - Thanks @KatsuragiCSL
 - [x] Add extensions fuzzing for http recon
@@ -123,7 +145,6 @@ Scan Types:
 - [ ] Enable usage of multiple scan types in one scan.
 - [ ] Enable scanning of multiple hosts in one scan.
 - [ ] Fully implement Remote Mode on all scans
-
 
 **Feel free to send your pull requests :)**  
 *For any pull requests, please try to follow these [Contributing Guidelines](CONTRIBUTING.md).*

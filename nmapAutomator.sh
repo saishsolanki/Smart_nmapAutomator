@@ -1,5 +1,38 @@
+
 #!/bin/sh
-#by @21y4d
+# by @21y4d
+#
+# Requirements:
+#   - nmap, host, awk, sed, grep, sort, uniq, cut, tee, cat, printf, mkdir, cd, rm, sleep, stty, jobs, wait, expr
+#   - smtp-user-enum, swaks, dnsrecon, dig, fierce, sslscan, nikto, whatweb, wafw00f, ffuf, gobuster, joomscan, wpscan, droopescan, snmp-check, snmpwalk, onesixtyone, ldapsearch, smbmap, smbclient, crackmapexec, enum4linux, hydra, showmount, odat, NetExec, sqsh
+#   - Wordlists/files: users.txt, passwords.txt, /usr/share/wordlists/metasploit/unix_users.txt, /usr/share/onesixtyone/names, accounts/accounts-multiple.txt
+#   - Set MAX_PING_JOBS env var to control ping parallelism (default: 25)
+
+# Check for required tools and wordlists, warn if missing
+REQUIRED_TOOLS="nmap host awk sed grep sort uniq cut tee cat printf mkdir cd rm sleep stty jobs wait expr"
+RECON_TOOLS="smtp-user-enum swaks dnsrecon dig fierce sslscan nikto whatweb wafw00f ffuf gobuster joomscan wpscan droopescan snmp-check snmpwalk onesixtyone ldapsearch smbmap smbclient crackmapexec enum4linux hydra showmount odat NetExec sqsh"
+REQUIRED_WORDLISTS="users.txt passwords.txt /usr/share/wordlists/metasploit/unix_users.txt /usr/share/onesixtyone/names accounts/accounts-multiple.txt"
+check_requirements() {
+        missingTools=""
+        for tool in ${REQUIRED_TOOLS} ${RECON_TOOLS}; do
+                if ! command -v "$tool" >/dev/null 2>&1; then
+                        missingTools="$missingTools $tool"
+                fi
+        done
+        if [ -n "$missingTools" ]; then
+                printf "${YELLOW}Warning: The following tools are missing and some recon/scans may not work: ${NC}${missingTools}\n"
+        fi
+        missingWordlists=""
+        for wordlist in ${REQUIRED_WORDLISTS}; do
+                if [ ! -f "$wordlist" ]; then
+                        missingWordlists="$missingWordlists $wordlist"
+                fi
+        done
+        if [ -n "$missingWordlists" ]; then
+                printf "${YELLOW}Warning: The following wordlists/files are missing and some recon commands may fail: ${NC}${missingWordlists}\n"
+        fi
+}
+check_requirements
 
 # Define ANSI color variables
 RED='\033[0;31m'
@@ -32,153 +65,240 @@ while [ $# -gt 0 ]; do
                 shift
                 shift
                 ;;
-        -o | --output)
-                OUTPUTDIR="$2"
-                shift
-                shift
-                ;;
-        -s | --static-nmap)
-                NMAPPATH="$2"
-                shift
-                shift
-                ;;
-        -r | --remote)
-                REMOTE=true
-                shift
-                ;;
-        *)
-                POSITIONAL="${POSITIONAL} $1"
-                shift
-                ;;
-        esac
-done
-set -- ${POSITIONAL}
+        # Recommend recon tools/commands to be run on found ports, with in-depth enumeration and NetExec for many protocols
+        reconRecommend() {
+                printf "${GREEN}---------------------Recon Recommendations---------------------\n"
+                printf "${NC}\n"
 
-# Legacy flags support, if run without -H/-t
-if [ -z "${HOST}" ]; then
-        HOST="$1"
-fi
+                IFS="
+        "
 
-if [ -z "${TYPE}" ]; then
-        TYPE="$2"
-fi
-
-# Legacy types support, if quick/basic used
-if expr "${TYPE}" : '^\([Qq]uick\)$' >/dev/null; then
-        TYPE="Port"
-elif expr "${TYPE}" : '^\([Bb]asic\)$' >/dev/null; then
-        TYPE="Script"
-fi
-
-# Set DNS or default to system DNS
-if [ -n "${DNS}" ]; then
-        DNSSERVER="${DNS}"
-        DNSSTRING="--dns-server=${DNSSERVER}"
-else
-        DNSSERVER="$(grep 'nameserver' /etc/resolv.conf | grep -v '#' | head -n 1 | awk {'print $NF'})"
-        DNSSTRING="--system-dns"
-fi
-
-# Set output dir or default to host-based dir
-if [ -z "${OUTPUTDIR}" ]; then
-        OUTPUTDIR="${HOST}"
-fi
-
-# Set path to nmap binary or default to nmap in $PATH, or resort to --remote mode
-if [ -z "${NMAPPATH}" ] && type nmap >/dev/null 2>&1; then
-        NMAPPATH="$(type nmap | awk {'print $NF'})"
-elif [ -n "${NMAPPATH}" ]; then
-        NMAPPATH="$(cd "$(dirname ${NMAPPATH})" && pwd -P)/$(basename ${NMAPPATH})"
-        # Ensure static binary is executable and is nmap
-        if [ ! -x $NMAPPATH ]; then
-                printf "${RED}\nFile is not executable! Attempting chmod +x...${NC}\n"
-                chmod +x $NMAPPATH 2>/dev/null || (printf "${RED}Could not chmod. Running in Remote mode...${NC}\n\n" && REMOTE=true)
-        elif [ $($NMAPPATH -h | head -c4) != "Nmap" ]; then
-                printf "${RED}\nStatic binary does not appear to be Nmap! Running in Remote mode...${NC}\n\n" && REMOTE=true
-        fi
-        printf "${GREEN}\nUsing static nmap binary at ${NMAPPATH}${NC}\n"
-else
-        printf "${RED}\nNmap is not installed and -s is not used. Running in Remote mode...${NC}\n\n" && REMOTE=true
-fi
-
-# Print usage menu and exit. Used when issues are encountered
-# No args needed
-usage() {
-        echo
-        printf "${RED}Usage: $(basename $0) -H/--host ${NC}<TARGET-IP>${RED} -t/--type ${NC}<TYPE>${RED}\n"
-        printf "${YELLOW}Optional: [-r/--remote ${NC}<REMOTE MODE>${YELLOW}] [-d/--dns ${NC}<DNS SERVER>${YELLOW}] [-o/--output ${NC}<OUTPUT DIRECTORY>${YELLOW}] [-s/--static-nmap ${NC}<STATIC NMAP PATH>${YELLOW}]\n\n"
-        printf "Scan Types:\n"
-        printf "${YELLOW}\tNetwork : ${NC}Shows all live hosts in the host's network ${YELLOW}(~15 seconds)\n"
-        printf "${YELLOW}\tPort    : ${NC}Shows all open ports ${YELLOW}(~15 seconds)\n"
-        printf "${YELLOW}\tScript  : ${NC}Runs a script scan on found ports ${YELLOW}(~5 minutes)\n"
-        printf "${YELLOW}\tFull    : ${NC}Runs a full range port scan, then runs a script scan on new ports ${YELLOW}(~5-10 minutes)\n"
-        printf "${YELLOW}\tUDP     : ${NC}Runs a UDP scan \"requires sudo\" ${YELLOW}(~5 minutes)\n"
-        printf "${YELLOW}\tVulns   : ${NC}Runs CVE scan and nmap Vulns scan on all found ports ${YELLOW}(~5-15 minutes)\n"
-        printf "${YELLOW}\tRecon   : ${NC}Suggests recon commands, then prompts to automatically run them\n"
-        printf "${YELLOW}\tAll     : ${NC}Runs all the scans ${YELLOW}(~20-30 minutes)\n"
-        printf "${NC}\n"
-        exit 1
-}
-
-# Print initial header and set initial variables before scans start
-# No args needed
-header() {
-        echo
-
-        # Print scan type
-        if expr "${TYPE}" : '^\([Aa]ll\)$' >/dev/null; then
-                printf "${YELLOW}Running all scans on ${NC}${HOST}"
-        else
-                printf "${YELLOW}Running a ${TYPE} scan on ${NC}${HOST}"
-        fi
-
-        if expr "${HOST}" : '^\(\([[:alnum:]-]\{1,63\}\.\)*[[:alpha:]]\{2,6\}\)$' >/dev/null; then
-                urlIP="$(host -4 -W 1 ${HOST} ${DNSSERVER} 2>/dev/null | grep ${HOST} | head -n 1 | awk {'print $NF'})"
-                if [ -n "${urlIP}" ]; then
-                        printf "${YELLOW} with IP ${NC}${urlIP}\n\n"
-                else
-                        printf ".. ${RED}Could not resolve IP of ${NC}${HOST}\n\n"
+                # Set $ports and $file variables
+                if [ -f "nmap/Full_Extra_${HOST}.nmap" ]; then
+                        ports="${allPorts}"
+                        file="$(cat "nmap/Script_${HOST}.nmap" "nmap/Full_Extra_${HOST}.nmap" | grep "open" | grep -v "#" | sort | uniq)"
+                elif [ -f "nmap/Script_${HOST}.nmap" ]; then
+                        ports="${commonPorts}"
+                        file="$(grep "open" "nmap/Script_${HOST}.nmap" | grep -v "#")"
                 fi
-        else
-                printf "\n"
-        fi
 
-        if $REMOTE; then
-                printf "${YELLOW}Running in Remote mode! Some scans will be limited.\n"
-        fi
+                # SMTP recon
+                if echo "${file}" | grep -q "25/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}SMTP Recon:\n"
+                        printf "${NC}\n"
+                        echo "smtp-user-enum -U /usr/share/wordlists/metasploit/unix_users.txt -t \"${HOST}\" | tee \"recon/smtp_user_enum_${HOST}.txt\""
+                        echo "swaks --to test@${HOST} --from test@${HOST} --server ${HOST} | tee \"recon/swaks_${HOST}.txt\""
+                        echo "nmap --script smtp-enum-users,smtp-commands -p25 \"${HOST}\" -oN \"recon/nmap_smtp_${HOST}.txt\""
+                        echo
+                fi
 
-        # Set $subnet variable
-        if expr "${HOST}" : '^\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\)$' >/dev/null; then
-                subnet="$(echo "${HOST}" | cut -d "." -f 1,2,3).0"
-        fi
+                # DNS Recon
+                if echo "${file}" | grep -q "53/tcp" && [ -n "${DNSSERVER}" ]; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}DNS Recon:\n"
+                        printf "${NC}\n"
+                        echo "host -l \"${HOST}\" \"${DNSSERVER}\" | tee \"recon/hostname_${HOST}.txt\""
+                        echo "dnsrecon -r \"${subnet}/24\" -n \"${DNSSERVER}\" | tee \"recon/dnsrecon_${HOST}.txt\""
+                        echo "dnsrecon -r 127.0.0.0/24 -n \"${DNSSERVER}\" | tee \"recon/dnsrecon-local_${HOST}.txt\""
+                        echo "dig -x \"${HOST}\" @${DNSSERVER} | tee \"recon/dig_${HOST}.txt\""
+                        echo "fierce --domain ${HOST} | tee \"recon/fierce_${HOST}.txt\""
+                        echo "nmap --script dns-zone-transfer,dns-nsid,dns-cache-snoop,dns-check-zone -p53 \"${HOST}\" -oN \"recon/nmap_dns_${HOST}.txt\""
+                        echo
+                fi
 
-        # Set $nmapType variable based on ping
-        kernel="$(uname -s)"
-        checkPing="$(checkPing "${urlIP:-$HOST}")"
-        nmapType="$(echo "${checkPing}" | head -n 1)"
+                # Web recon
+                if echo "${file}" | grep -i -q http; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}Web Servers Recon:\n"
+                        printf "${NC}\n"
 
-        # Set if host is pingable 'for ping scans'
-        if expr "${nmapType}" : ".*-Pn$" >/dev/null; then
-                pingable=false
-                printf "${NC}\n"
-                printf "${YELLOW}No ping detected.. Will not use ping scans!\n"
-                printf "${NC}\n"
-        else
-                pingable=true
+                        # HTTP recon
+                        for line in ${file}; do
+                                if echo "${line}" | grep -i -q http; then
+                                        port="$(echo "${line}" | cut -d "/" -f 1)"
+                                        if echo "${line}" | grep -q ssl/http; then
+                                                urlType='https://'
+                                                echo "sslscan \"${HOST}\" | tee \"recon/sslscan_${HOST}_${port}.txt\""
+                                                echo "nikto -host \"${urlType}${HOST}:${port}\" -ssl | tee \"recon/nikto_${HOST}_${port}.txt\""
+                                        else
+                                                urlType='http://'
+                                                echo "nikto -host \"${urlType}${HOST}:${port}\" | tee \"recon/nikto_${HOST}_${port}.txt\""
+                                        fi
+                                        echo "whatweb \"${urlType}${HOST}:${port}\" | tee \"recon/whatweb_${HOST}_${port}.txt\""
+                                        echo "wafw00f \"${urlType}${HOST}:${port}\" | tee \"recon/wafw00f_${HOST}_${port}.txt\""
+                                        echo "nmap --script http-enum,http-title,http-headers,http-methods,http-auth,http-vuln* -p${port} \"${HOST}\" -oN \"recon/nmap_http_${HOST}_${port}.txt\""
+                                        if type ffuf >/dev/null 2>&1; then
+                                                extensions="$(echo 'index' >./index && ffuf -s -w ./index:FUZZ -mc '200,302' -e '.asp,.aspx,.html,.jsp,.php' -u \"${urlType}${HOST}:${port}/FUZZ\" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/.$//' && rm ./index)"
+                                                echo "ffuf -ic -w /usr/share/wordlists/dirb/common.txt -e '${extensions}' -u \"${urlType}${HOST}:${port}/FUZZ\" | tee \"recon/ffuf_${HOST}_${port}.txt\""
+                                        else
+                                                extensions="$(echo 'index' >./index && gobuster dir -w ./index -t 30 -qnkx '.asp,.aspx,.html,.jsp,.php' -s '200,302' -u \"${urlType}${HOST}:${port}\" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/.$//' && rm ./index)"
+                                                echo "gobuster dir -w /usr/share/wordlists/dirb/common.txt -t 30 -ekx '${extensions}' -u \"${urlType}${HOST}:${port}\" -o \"recon/gobuster_${HOST}_${port}.txt\""
+                                        fi
+                                        echo
+                                fi
+                        done
+                        # CMS recon
+                        if [ -f "nmap/Script_${HOST}.nmap" ]; then
+                                cms="$(grep http-generator "nmap/Script_${HOST}.nmap" | cut -d " " -f 2)"
+                                if [ -n "${cms}" ]; then
+                                        for line in ${cms}; do
+                                                port="$(sed -n 'H;x;s/\/.*'"${line}"'.*//p' "nmap/Script_${HOST}.nmap")"
 
-        fi
+                                                # case returns 0 by default (no match), so ! case returns 1
+                                                if ! case "${cms}" in Joomla | WordPress | Drupal) false ;; esac then
+                                                        printf "${NC}\n"
+                                                        printf "${YELLOW}CMS Recon:\n"
+                                                        printf "${NC}\n"
+                                                fi
+                                                case "${cms}" in
+                                                Joomla!) echo "joomscan --url \"${HOST}:${port}\" | tee \"recon/joomscan_${HOST}_${port}.txt\"" ;;
+                                                WordPress) echo "wpscan --url \"${HOST}:${port}\" --enumerate p | tee \"recon/wpscan_${HOST}_${port}.txt\"" ;;
+                                                Drupal) echo "droopescan scan drupal -u \"${HOST}:${port}\" | tee \"recon/droopescan_${HOST}_${port}.txt\"" ;;
+                                                esac
+                                        done
+                                fi
+                        fi
+                fi
 
-        # OS Detection
-        ttl="$(echo "${checkPing}" | tail -n 1)"
-        if [ "${ttl}" != "nmap -Pn" ]; then
-                osType="$(checkOS "${ttl}")"
-                printf "${NC}\n"
-                printf "${GREEN}Host is likely running ${osType}\n"
-        fi
+                # SNMP recon
+                if [ -f "nmap/UDP_Extra_${HOST}.nmap" ] && grep -q "161/udp.*open" "nmap/UDP_Extra_${HOST}.nmap"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}SNMP Recon:\n"
+                        printf "${NC}\n"
+                        echo "snmp-check \"${HOST}\" -c public | tee \"recon/snmpcheck_${HOST}.txt\""
+                        echo "snmpwalk -Os -c public -v1 \"${HOST}\" | tee \"recon/snmpwalk_${HOST}.txt\""
+                        echo "onesixtyone -c /usr/share/onesixtyone/names -i \"${HOST}\" | tee \"recon/onesixtyone_${HOST}.txt\""
+                        echo "nmap --script snmp* -p161 \"${HOST}\" -oN \"recon/nmap_snmp_${HOST}.txt\""
+                        echo
+                fi
 
-        echo
-        echo
-}
+                # LDAP recon
+                if echo "${file}" | grep -q "389/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}LDAP Recon:\n"
+                        printf "${NC}\n"
+                        echo "ldapsearch -x -h \"${HOST}\" -s base | tee \"recon/ldapsearch_${HOST}.txt\""
+                        echo "ldapsearch -x -h \"${HOST}\" -b \"\$(grep rootDomainNamingContext \"recon/ldapsearch_${HOST}.txt\" | cut -d ' ' -f2)\" | tee \"recon/ldapsearch_DC_${HOST}.txt\""
+                        echo "nmap -Pn -p 389 --script ldap-search --script-args 'ldap.username=\"\$(grep rootDomainNamingContext \"recon/ldapsearch_${HOST}.txt\" | cut -d \\" \\" -f2)\"' \"${HOST}\" -oN \"recon/nmap_ldap_${HOST}.txt\""
+                        echo "NetExec ldap -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_ldap_${HOST}.txt\""
+                        echo
+                fi
+
+                # SMB recon
+                if echo "${file}" | grep -q "445/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}SMB Recon:\n"
+                        printf "${NC}\n"
+                        echo "smbmap -H \"${HOST}\" | tee \"recon/smbmap_${HOST}.txt\""
+                        echo "smbclient -L \"//${HOST}/\" -U \"guest\"% | tee \"recon/smbclient_${HOST}.txt\""
+                        echo "crackmapexec smb ${HOST} | tee \"recon/crackmapexec_smb_${HOST}.txt\""
+                        echo "enum4linux -a \"${HOST}\" | tee \"recon/enum4linux_${HOST}.txt\""
+                        echo "nmap --script smb-enum-shares,smb-enum-users,smb-os-discovery,smb-vuln* -p445 \"${HOST}\" -oN \"recon/nmap_smb_${HOST}.txt\""
+                        echo "NetExec smb -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_smb_${HOST}.txt\""
+                        echo
+                fi
+
+                # SSH recon
+                if echo "${file}" | grep -q "22/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}SSH Recon:\n"
+                        printf "${NC}\n"
+                        echo "nmap --script ssh2-enum-algos,ssh-hostkey,ssh-auth-methods -p22 \"${HOST}\" -oN \"recon/nmap_ssh_${HOST}.txt\""
+                        echo "hydra -L users.txt -P passwords.txt ssh://${HOST} | tee \"recon/hydra_ssh_${HOST}.txt\""
+                        echo "NetExec ssh -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_ssh_${HOST}.txt\""
+                        echo
+                fi
+
+                # FTP recon
+                if echo "${file}" | grep -q "21/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}FTP Recon:\n"
+                        printf "${NC}\n"
+                        echo "nmap --script ftp-anon,ftp-bounce,ftp-syst,ftp-vsftpd-backdoor,ftp-proftpd-backdoor,ftp-vuln* -p21 \"${HOST}\" -oN \"recon/nmap_ftp_${HOST}.txt\""
+                        echo "hydra -L users.txt -P passwords.txt ftp://${HOST} | tee \"recon/hydra_ftp_${HOST}.txt\""
+                        echo "NetExec ftp -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_ftp_${HOST}.txt\""
+                        echo
+                fi
+
+                # WMI recon (usually port 135/tcp)
+                if echo "${file}" | grep -q "135/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}WMI Recon:\n"
+                        printf "${NC}\n"
+                        echo "nmap --script msrpc-enum,smb-os-discovery -p135 \"${HOST}\" -oN \"recon/nmap_wmi_${HOST}.txt\""
+                        echo "NetExec wmi -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_wmi_${HOST}.txt\""
+                        echo
+                fi
+
+                # WINRM recon (5985/tcp, 5986/tcp)
+                if echo "${file}" | grep -E -q "5985/tcp|5986/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}WINRM Recon:\n"
+                        printf "${NC}\n"
+                        echo "nmap --script http-winrm-enum -p5985,5986 \"${HOST}\" -oN \"recon/nmap_winrm_${HOST}.txt\""
+                        echo "NetExec winrm -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_winrm_${HOST}.txt\""
+                        echo
+                fi
+
+                # RDP recon (3389/tcp)
+                if echo "${file}" | grep -q "3389/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}RDP Recon:\n"
+                        printf "${NC}\n"
+                        echo "nmap --script rdp-enum-encryption,rdp-vuln-ms12-020 -p3389 \"${HOST}\" -oN \"recon/nmap_rdp_${HOST}.txt\""
+                        echo "NetExec rdp -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_rdp_${HOST}.txt\""
+                        echo
+                fi
+
+                # VNC recon (5900/tcp)
+                if echo "${file}" | grep -q "5900/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}VNC Recon:\n"
+                        printf "${NC}\n"
+                        echo "nmap --script vnc-info,vnc-title,vnc-auth -p5900 \"${HOST}\" -oN \"recon/nmap_vnc_${HOST}.txt\""
+                        echo "NetExec vnc -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_vnc_${HOST}.txt\""
+                        echo
+                fi
+
+                # MSSQL recon (1433/tcp)
+                if echo "${file}" | grep -q "1433/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}MSSQL Recon:\n"
+                        printf "${NC}\n"
+                        echo "nmap --script ms-sql-info,ms-sql-config,ms-sql-dump-hashes,ms-sql-tables,ms-sql-xp-cmdshell -p1433 \"${HOST}\" -oN \"recon/nmap_mssql_${HOST}.txt\""
+                        echo "sqsh -S ${HOST} -U sa -P password -C 'SELECT name FROM master..sysdatabases' | tee \"recon/sqsh_${HOST}.txt\""
+                        echo "NetExec mssql -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_mssql_${HOST}.txt\""
+                        echo
+                fi
+
+                # NFS recon (2049/tcp)
+                if echo "${file}" | grep -q "2049/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}NFS Recon:\n"
+                        printf "${NC}\n"
+                        echo "showmount -e ${HOST} | tee \"recon/showmount_${HOST}.txt\""
+                        echo "nmap --script nfs-ls,nfs-showmount,nfs-statfs -p2049 \"${HOST}\" -oN \"recon/nmap_nfs_${HOST}.txt\""
+                        echo "NetExec nfs -u users.txt -p passwords.txt ${HOST} | tee \"recon/netexec_nfs_${HOST}.txt\""
+                        echo
+                fi
+
+                # Oracle DB recon
+                if echo "${file}" | grep -q "1521/tcp"; then
+                        printf "${NC}\n"
+                        printf "${YELLOW}Oracle Recon:\n"
+                        printf "${NC}\n"
+                        echo "odat sidguesser -s \"${HOST}\" -p 1521"
+                        echo "odat passwordguesser -s \"${HOST}\" -p 1521 -d XE --accounts-file accounts/accounts-multiple.txt"
+                        echo
+                fi
+
+                IFS="${origIFS}"
+
+                echo
+                echo
+                echo
+        }
 
 # Used Before and After each nmap scan, to keep found ports consistent across the script
 # $1 is $HOST
@@ -287,24 +407,36 @@ nmapProgressBar() {
 }
 
 # Nmap scan for live hosts
+
+# Network scan function: discovers live hosts using nmap or ping, with job control for efficiency
 networkScan() {
         printf "${GREEN}---------------------Starting Network Scan---------------------\n"
         printf "${NC}\n"
 
         origHOST="${HOST}"
         HOST="${urlIP:-$HOST}"
-        if [ $kernel = "Linux" ]; then TW="W"; else TW="t"; fi
+        if [ "${kernel}" = "Linux" ]; then TW="W"; else TW="t"; fi
 
-        if ! $REMOTE; then
+        if ! ${REMOTE}; then
                 # Discover live hosts with nmap
-                nmapProgressBar "${nmapType} -T4 --max-retries 1 --max-scan-delay 20 -n -sn -oN nmap/Network_${HOST}.nmap ${subnet}/24"
-                printf "${YELLOW}Found the following live hosts:${NC}\n\n"
-                cat nmap/Network_${HOST}.nmap | grep -v '#' | grep "$(echo $subnet | sed 's/..$//')" | awk {'print $5'}
-        elif $pingable; then
-                # Discover live hosts with ping
+                                nmapProgressBar "${nmapType} -T4 --max-retries 1 --max-scan-delay 20 -n -sn -oN nmap/Network_${HOST}.nmap ${subnet}/24"
+                                nmapStatus=$?
+                                if [ $nmapStatus -ne 0 ]; then
+                                        printf "${RED}nmap network scan failed with exit code $nmapStatus${NC}\n"
+                                        return 1
+                                fi
+                                printf "${YELLOW}Found the following live hosts:${NC}\n\n"
+                                cat nmap/Network_${HOST}.nmap | grep -v '#' | grep "$(echo "${subnet}" | sed 's/..$//')" | awk {'print $5'}
+        elif ${pingable}; then
+                # Discover live hosts with ping, limit background jobs for efficiency
                 echo >"nmap/Network_${HOST}.nmap"
+                maxJobs="${MAX_PING_JOBS:-25}" # User can override, default 25
                 for ip in $(seq 0 254); do
-                        (ping -c 1 -${TW} 1 "$(echo $subnet | sed 's/..$//').$ip" 2>/dev/null | grep 'stat' -A1 | xargs | grep -v ', 0.*received' | awk {'print $2'} >>"nmap/Network_${HOST}.nmap") &
+                        # Wait if too many jobs are running
+                        while [ "$(jobs | wc -l)" -ge "${maxJobs}" ]; do
+                                wait -n 2>/dev/null || wait
+                        done
+                        (ping -c 1 -${TW} 1 "$(echo "${subnet}" | sed 's/..$//').${ip}" 2>/dev/null | grep 'stat' -A1 | xargs | grep -v ', 0.*received' | awk {'print $2'} >>"nmap/Network_${HOST}.nmap") &
                 done
                 wait
                 sed -i '/^$/d' "nmap/Network_${HOST}.nmap"
@@ -457,12 +589,12 @@ UDPScan() {
         echo
 }
 
-# Nmap vulnerability detection script scan
+# Nmap vulnerability and version detection script scan
 vulnsScan() {
         printf "${GREEN}---------------------Starting Vulns Scan-----------------------\n"
         printf "${NC}\n"
 
-        if ! $REMOTE; then
+        if ! ${REMOTE}; then
                 # Set ports to be scanned (common or all)
                 if [ -z "${allPorts}" ]; then
                         portType="common"
@@ -472,26 +604,94 @@ vulnsScan() {
                         ports="${allPorts}"
                 fi
 
-                # Ensure the vulners script is available, then run it with nmap
-                if [ ! -f /usr/share/nmap/scripts/vulners.nse ]; then
-                        printf "${RED}Please install 'vulners.nse' nmap script:\n"
-                        printf "${RED}https://github.com/vulnersCom/nmap-vulners\n"
-                        printf "${RED}\n"
-                        printf "${RED}Skipping CVE scan!\n"
+                # Run all relevant nmap script categories for vulnerabilities and version detection
+                # 1. Default scripts (safe, version, vuln, exploit, malware, auth, intrusive, dos, brute, discovery, external, fuzzer, intrusive, malware, safe, version, vuln)
+                # 2. Specific scripts: vuln, vulners, exploit, safe, malware, dos, brute, intrusive, auth, discovery, external, fuzzer
+
+                # Run default scripts
+                printf "${YELLOW}Running default script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sC -sV -p${ports} --open -oN nmap/DefaultScripts_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run vuln category
+                printf "${YELLOW}Running vuln script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script vuln -p${ports} --open -oN nmap/VulnScripts_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run vulners script if available
+                if [ -f /usr/share/nmap/scripts/vulners.nse ]; then
+                        printf "${YELLOW}Running vulners script scan on ${portType} ports\n"
                         printf "${NC}\n"
-                else
-                        printf "${YELLOW}Running CVE scan on ${portType} ports\n"
-                        printf "${NC}\n"
-                        nmapProgressBar "${nmapType} -sV --script vulners --script-args mincvss=7.0 -p${ports} --open -oN nmap/CVEs_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                        nmapProgressBar "${nmapType} -sV --script vulners --script-args mincvss=7.0 -p${ports} --open -oN nmap/Vulners_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
                         echo
+                else
+                        printf "${RED}vulners.nse not found. Skipping vulners script.\n"
+                        printf "${RED}To install: https://github.com/vulnersCom/nmap-vulners\n"
+                        printf "${NC}\n"
                 fi
 
-                # Nmap vulnerability detection script scan
-                echo
-                printf "${YELLOW}Running Vuln scan on ${portType} ports\n"
-                printf "${YELLOW}This may take a while, depending on the number of detected services..\n"
+                # Run exploit category
+                printf "${YELLOW}Running exploit script scan on ${portType} ports\n"
                 printf "${NC}\n"
-                nmapProgressBar "${nmapType} -sV --script vuln -p${ports} --open -oN nmap/Vulns_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                nmapProgressBar "${nmapType} -sV --script exploit -p${ports} --open -oN nmap/Exploit_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run safe category
+                printf "${YELLOW}Running safe script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script safe -p${ports} --open -oN nmap/Safe_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run malware category
+                printf "${YELLOW}Running malware script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script malware -p${ports} --open -oN nmap/Malware_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run dos category
+                printf "${YELLOW}Running dos script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script dos -p${ports} --open -oN nmap/Dos_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run brute category
+                printf "${YELLOW}Running brute script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script brute -p${ports} --open -oN nmap/Brute_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run intrusive category
+                printf "${YELLOW}Running intrusive script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script intrusive -p${ports} --open -oN nmap/Intrusive_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run auth category
+                printf "${YELLOW}Running auth script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script auth -p${ports} --open -oN nmap/Auth_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run discovery category
+                printf "${YELLOW}Running discovery script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script discovery -p${ports} --open -oN nmap/Discovery_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run external category
+                printf "${YELLOW}Running external script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script external -p${ports} --open -oN nmap/External_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
+                # Run fuzzer category
+                printf "${YELLOW}Running fuzzer script scan on ${portType} ports\n"
+                printf "${NC}\n"
+                nmapProgressBar "${nmapType} -sV --script fuzzer -p${ports} --open -oN nmap/Fuzzer_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                echo
+
         else
                 printf "${YELLOW}Vulns Scan is not supported in Remote mode.\n${NC}"
         fi
@@ -747,11 +947,15 @@ runRecon() {
                         printf "${NC}\n"
                         printf "${YELLOW}Starting ${currentScan} scan\n"
                         printf "${NC}\n"
-                        eval "${line}"
-                        printf "${NC}\n"
-                        printf "${YELLOW}Finished ${currentScan} scan\n"
-                        printf "${NC}\n"
-                        printf "${YELLOW}=========================\n"
+                                                eval "${line}"
+                                                scanStatus=$?
+                                                if [ $scanStatus -ne 0 ]; then
+                                                        printf "${RED}Warning: ${currentScan} scan failed with exit code $scanStatus${NC}\n"
+                                                fi
+                                                printf "${NC}\n"
+                                                printf "${YELLOW}Finished ${currentScan} scan\n"
+                                                printf "${NC}\n"
+                                                printf "${YELLOW}=========================\n"
                 fi
         done
 
