@@ -98,6 +98,16 @@ GREEN='\033[0;32m'
 NC='\033[0m'
 origIFS="${IFS}"
 
+# Set default values for variables
+OUTPUTDIR="${OUTPUTDIR:-.}"
+NMAPPATH="${NMAPPATH:-nmap}"
+kernel="$(uname)"
+subnet=""
+DNSSERVER=""
+DNSSERVER="${DNS:-${DNSSERVER}}"
+osType="Unknown"
+pingable=false
+
 # Start timer
 elapsedStart="$(date '+%H:%M:%S' | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')"
 REMOTE=false
@@ -127,8 +137,7 @@ while [ $# -gt 0 ]; do
                 printf "${GREEN}---------------------Recon Recommendations---------------------\n"
                 printf "${NC}\n"
 
-                IFS="
-        "
+                IFS=""
 
                 # Set $ports and $file variables
                 if [ -f "nmap/Full_Extra_${HOST}.nmap" ]; then
@@ -203,11 +212,14 @@ while [ $# -gt 0 ]; do
                                                 port="$(sed -n 'H;x;s/\/.*'"${line}"'.*//p' "nmap/Script_${HOST}.nmap")"
 
                                                 # case returns 0 by default (no match), so ! case returns 1
-                                                if ! case "${cms}" in Joomla | WordPress | Drupal) false ;; esac then
+                                                case "${cms}" in
+                                                Joomla | WordPress | Drupal) ;;
+                                                *)
                                                         printf "${NC}\n"
                                                         printf "${YELLOW}CMS Recon:\n"
                                                         printf "${NC}\n"
-                                                fi
+                                                        ;;
+                                                esac
                                                 case "${cms}" in
                                                 Joomla!) echo "joomscan --url \"${HOST}:${port}\" | tee \"recon/joomscan_${HOST}_${port}.txt\"" ;;
                                                 WordPress) echo "wpscan --url \"${HOST}:${port}\" --enumerate p | tee \"recon/wpscan_${HOST}_${port}.txt\"" ;;
@@ -828,155 +840,6 @@ recon() {
         IFS="${origIFS}"
 }
 
-# Recommend recon tools/commands to be run on found ports
-reconRecommend() {
-        printf "${GREEN}---------------------Recon Recommendations---------------------\n"
-        printf "${NC}\n"
-
-        IFS="
-"
-
-        # Set $ports and $file variables
-        if [ -f "nmap/Full_Extra_${HOST}.nmap" ]; then
-                ports="${allPorts}"
-                file="$(cat "nmap/Script_${HOST}.nmap" "nmap/Full_Extra_${HOST}.nmap" | grep "open" | grep -v "#" | sort | uniq)"
-        elif [ -f "nmap/Script_${HOST}.nmap" ]; then
-                ports="${commonPorts}"
-                file="$(grep "open" "nmap/Script_${HOST}.nmap" | grep -v "#")"
-
-        fi
-
-        # SMTP recon
-        if echo "${file}" | grep -q "25/tcp"; then
-                printf "${NC}\n"
-                printf "${YELLOW}SMTP Recon:\n"
-                printf "${NC}\n"
-                echo "smtp-user-enum -U /usr/share/wordlists/metasploit/unix_users.txt -t \"${HOST}\" | tee \"recon/smtp_user_enum_${HOST}.txt\""
-                echo
-        fi
-
-        # DNS Recon
-        if echo "${file}" | grep -q "53/tcp" && [ -n "${DNSSERVER}" ]; then
-                printf "${NC}\n"
-                printf "${YELLOW}DNS Recon:\n"
-                printf "${NC}\n"
-                echo "host -l \"${HOST}\" \"${DNSSERVER}\" | tee \"recon/hostname_${HOST}.txt\""
-                echo "dnsrecon -r \"${subnet}/24\" -n \"${DNSSERVER}\" | tee \"recon/dnsrecon_${HOST}.txt\""
-                echo "dnsrecon -r 127.0.0.0/24 -n \"${DNSSERVER}\" | tee \"recon/dnsrecon-local_${HOST}.txt\""
-                echo "dig -x \"${HOST}\" @${DNSSERVER} | tee \"recon/dig_${HOST}.txt\""
-                echo
-        fi
-
-        # Web recon
-        if echo "${file}" | grep -i -q http; then
-                printf "${NC}\n"
-                printf "${YELLOW}Web Servers Recon:\n"
-                printf "${NC}\n"
-
-                # HTTP recon
-                for line in ${file}; do
-                        if echo "${line}" | grep -i -q http; then
-                                port="$(echo "${line}" | cut -d "/" -f 1)"
-                                if echo "${line}" | grep -q ssl/http; then
-                                        urlType='https://'
-                                        echo "sslscan \"${HOST}\" | tee \"recon/sslscan_${HOST}_${port}.txt\""
-                                        echo "nikto -host \"${urlType}${HOST}:${port}\" -ssl | tee \"recon/nikto_${HOST}_${port}.txt\""
-                                else
-                                        urlType='http://'
-                                        echo "nikto -host \"${urlType}${HOST}:${port}\" | tee \"recon/nikto_${HOST}_${port}.txt\""
-                                fi
-                                if type ffuf >/dev/null 2>&1; then
-                                        extensions="$(echo 'index' >./index && ffuf -s -w ./index:FUZZ -mc '200,302' -e '.asp,.aspx,.html,.jsp,.php' -u "${urlType}${HOST}:${port}/FUZZ" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/.$//' && rm ./index)"
-                                        echo "ffuf -ic -w /usr/share/wordlists/dirb/common.txt -e '${extensions}' -u \"${urlType}${HOST}:${port}/FUZZ\" | tee \"recon/ffuf_${HOST}_${port}.txt\""
-                                else
-                                        extensions="$(echo 'index' >./index && gobuster dir -w ./index -t 30 -qnkx '.asp,.aspx,.html,.jsp,.php' -s '200,302' -u "${urlType}${HOST}:${port}" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/.$//' && rm ./index)"
-                                        echo "gobuster dir -w /usr/share/wordlists/dirb/common.txt -t 30 -ekx '${extensions}' -u \"${urlType}${HOST}:${port}\" -o \"recon/gobuster_${HOST}_${port}.txt\""
-                                fi
-                                echo
-                        fi
-                done
-                # CMS recon
-                if [ -f "nmap/Script_${HOST}.nmap" ]; then
-                        cms="$(grep http-generator "nmap/Script_${HOST}.nmap" | cut -d " " -f 2)"
-                        if [ -n "${cms}" ]; then
-                                for line in ${cms}; do
-                                        port="$(sed -n 'H;x;s/\/.*'"${line}"'.*//p' "nmap/Script_${HOST}.nmap")"
-
-                                        # case returns 0 by default (no match), so ! case returns 1
-                                        if ! case "${cms}" in Joomla | WordPress | Drupal) false ;; esac then
-                                                printf "${NC}\n"
-                                                printf "${YELLOW}CMS Recon:\n"
-                                                printf "${NC}\n"
-                                        fi
-                                        case "${cms}" in
-                                        Joomla!) echo "joomscan --url \"${HOST}:${port}\" | tee \"recon/joomscan_${HOST}_${port}.txt\"" ;;
-                                        WordPress) echo "wpscan --url \"${HOST}:${port}\" --enumerate p | tee \"recon/wpscan_${HOST}_${port}.txt\"" ;;
-                                        Drupal) echo "droopescan scan drupal -u \"${HOST}:${port}\" | tee \"recon/droopescan_${HOST}_${port}.txt\"" ;;
-                                        esac
-                                done
-                        fi
-                fi
-        fi
-
-        # SNMP recon
-        if [ -f "nmap/UDP_Extra_${HOST}.nmap" ] && grep -q "161/udp.*open" "nmap/UDP_Extra_${HOST}.nmap"; then
-                printf "${NC}\n"
-                printf "${YELLOW}SNMP Recon:\n"
-                printf "${NC}\n"
-                echo "snmp-check \"${HOST}\" -c public | tee \"recon/snmpcheck_${HOST}.txt\""
-                echo "snmpwalk -Os -c public -v1 \"${HOST}\" | tee \"recon/snmpwalk_${HOST}.txt\""
-                echo
-        fi
-
-        # LDAP recon
-        if echo "${file}" | grep -q "389/tcp"; then
-                printf "${NC}\n"
-                printf "${YELLOW}ldap Recon:\n"
-                printf "${NC}\n"
-                echo "ldapsearch -x -h \"${HOST}\" -s base | tee \"recon/ldapsearch_${HOST}.txt\""
-                echo "ldapsearch -x -h \"${HOST}\" -b \"\$(grep rootDomainNamingContext \"recon/ldapsearch_${HOST}.txt\" | cut -d ' ' -f2)\" | tee \"recon/ldapsearch_DC_${HOST}.txt\""
-                echo "nmap -Pn -p 389 --script ldap-search --script-args 'ldap.username=\"\$(grep rootDomainNamingContext \"recon/ldapsearch_${HOST}.txt\" | cut -d \\" \\" -f2)\"' \"${HOST}\" -oN \"recon/nmap_ldap_${HOST}.txt\""
-                echo
-        fi
-
-        # SMB recon
-        if echo "${file}" | grep -q "445/tcp"; then
-                printf "${NC}\n"
-                printf "${YELLOW}SMB Recon:\n"
-                printf "${NC}\n"
-                echo "smbmap -H \"${HOST}\" | tee \"recon/smbmap_${HOST}.txt\""
-                echo "smbclient -L \"//${HOST}/\" -U \"guest\"% | tee \"recon/smbclient_${HOST}.txt\""
-                if [ "${osType}" = "Windows" ]; then
-                        echo "nmap -Pn -p445 --script vuln -oN \"recon/SMB_vulns_${HOST}.txt\" \"${HOST}\""
-                elif [ "${osType}" = "Linux" ]; then
-                        echo "enum4linux -a \"${HOST}\" | tee \"recon/enum4linux_${HOST}.txt\""
-                fi
-                echo
-        elif echo "${file}" | grep -q "139/tcp" && [ "${osType}" = "Linux" ]; then
-                printf "${NC}\n"
-                printf "${YELLOW}SMB Recon:\n"
-                printf "${NC}\n"
-                echo "enum4linux -a \"${HOST}\" | tee \"recon/enum4linux_${HOST}.txt\""
-                echo
-        fi
-
-        # Oracle DB recon
-        if echo "${file}" | grep -q "1521/tcp"; then
-                printf "${NC}\n"
-                printf "${YELLOW}Oracle Recon:\n"
-                printf "${NC}\n"
-                echo "odat sidguesser -s \"${HOST}\" -p 1521"
-                echo "odat passwordguesser -s \"${HOST}\" -p 1521 -d XE --accounts-file accounts/accounts-multiple.txt"
-                echo
-        fi
-
-        IFS="${origIFS}"
-
-        echo
-        echo
-        echo
-}
-
 # Run chosen recon commands
 runRecon() {
         echo
@@ -1047,6 +910,37 @@ footer() {
         printf "${NC}\n"
 }
 
+# Print header
+header() {
+        printf "${GREEN}---------------------Starting nmapAutomator---------------------\n"
+        printf "${NC}\n"
+        printf "${YELLOW}Host: ${HOST}\n"
+        printf "Type: ${TYPE}\n"
+        printf "Date: $(date)\n"
+        printf "${NC}\n"
+}
+
+# Print usage information
+usage() {
+        printf "${RED}Usage: $0 -H <host> -t <type> [-d <dns-server>]\n"
+        printf "${NC}\n"
+        printf "${YELLOW}Types:\n"
+        printf "  Network - Network scan\n"
+        printf "  Port - Port scan\n"
+        printf "  Script - Script scan\n"
+        printf "  Full - Full scan\n"
+        printf "  UDP - UDP scan\n"
+        printf "  Vulns - Vulnerability scan\n"
+        printf "  Recon - Reconnaissance\n"
+        printf "  All - All scans\n"
+        printf "${NC}\n"
+        printf "${YELLOW}Examples:\n"
+        printf "  $0 -H 192.168.1.1 -t Port\n"
+        printf "  $0 -H example.com -t Full -d 8.8.8.8\n"
+        printf "${NC}\n"
+        exit 1
+}
+
 # Choose run type based on chosen flags
 main() {
         assignPorts "${HOST}"
@@ -1097,11 +991,14 @@ if ! expr "${HOST}" : '^\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}
 fi
 
 # Ensure selected scan type is among available choices, then run the selected scan
-if ! case "${TYPE}" in [Nn]etwork | [Pp]ort | [Ss]cript | [Ff]ull | UDP | udp | [Vv]ulns | [Rr]econ | [Aa]ll) false ;; esac then
+case "${TYPE}" in
+[Nn]etwork | [Pp]ort | [Ss]cript | [Ff]ull | UDP | udp | [Vv]ulns | [Rr]econ | [Aa]ll)
         mkdir -p "${OUTPUTDIR}" && cd "${OUTPUTDIR}" && mkdir -p nmap/ || usage
         main | tee "nmapAutomator_${HOST}_${TYPE}.txt"
-else
+        ;;
+*)
         printf "${RED}\n"
         printf "${RED}Invalid Type!\n"
         usage
-fi
+        ;;
+esac
