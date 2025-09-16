@@ -55,13 +55,10 @@ check_requirements() {
                                                 url="https://raw.githubusercontent.com/rapid7/metasploit-framework/master/data/wordlists/unix_users.txt"
                                                 ;;
                                         /usr/share/onesixtyone/names)
-                                                url="https://raw.githubusercontent.com/trailofbits/onesixtyone/master/names"
+                                                url="https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Usernames/xato-net-10-million-usernames-dup.txt"
                                                 ;;
                                         accounts/accounts-multiple.txt)
-                                                url="https://raw.githubusercontent.com/NetSPI/PowerUpSQL/master/data/accounts-multiple.txt"
-                                                ;;
-                                        *)
-                                                url=""
+                                                url="https://raw.githubusercontent.com/danielmiessler/SecLists/refs/heads/master/Usernames/xato-net-10-million-usernames-dup.txt"
                                                 ;;
                                 esac
                                 if [ -n "$url" ]; then
