@@ -10,8 +10,11 @@
 
 # Check for required tools and wordlists, warn if missing, and offer to install tools
 REQUIRED_TOOLS="nmap host awk sed grep sort uniq cut tee cat printf mkdir cd rm sleep stty jobs wait expr"
-RECON_TOOLS="smtp-user-enum swaks dnsrecon dig fierce sslscan nikto whatweb wafw00f ffuf gobuster joomscan wpscan droopescan snmp-check snmpwalk onesixtyone ldapsearch smbmap smbclient crackmapexec enum4linux hydra showmount odat NetExec sqsh"
-REQUIRED_WORDLISTS="users.txt passwords.txt /usr/share/wordlists/metasploit/unix_users.txt /usr/share/onesixtyone/names accounts/accounts-multiple.txt"
+RECON_TOOLS="smtp-user-enum swaks dnsrecon dig fierce sslscan nikto whatweb wafw00f ffuf gobuster
+             joomscan wpscan droopescan snmp-check snmpwalk onesixtyone ldapsearch smbmap smbclient
+             crackmapexec enum4linux hydra showmount odat NetExec sqsh"
+REQUIRED_WORDLISTS="users.txt passwords.txt /usr/share/wordlists/metasploit/unix_users.txt
+                     /usr/share/onesixtyone/names accounts/accounts-multiple.txt"
 ROCKYOU_PATH="/usr/share/wordlists/rockyou.txt"
 check_requirements() {
         missingTools=""
@@ -21,9 +24,22 @@ check_requirements() {
                 fi
         done
         if [ -n "$missingTools" ]; then
-                printf "${YELLOW}Warning: The following tools are missing and some recon/scans may not work: ${NC}${missingTools}\n"
+                printf "${YELLOW}Warning: The following tools are missing and some recon/scans may not work:\n"
+                printf "${YELLOW}${NC}${missingTools}\n"
                 printf "${YELLOW}Would you like to attempt to install them now? [Y/n] ${NC}"
-                read installAns
+                
+                # Read with timeout (30 seconds)
+                installAns=""
+                timeout=30
+                while [ $timeout -gt 0 ] && [ -z "$installAns" ]; do
+                        if read -t 1 installAns 2>/dev/null; then
+                                break
+                        fi
+                        timeout=$((timeout - 1))
+                        printf "\033[2K\r${YELLOW}Would you like to attempt to install them now? [Y/n] (${timeout}s remaining): ${NC}"
+                done
+                printf "\n"
+                
                 if [ "${installAns}" = "Y" ] || [ "${installAns}" = "y" ] || [ -z "${installAns}" ]; then
                         for tool in $missingTools; do
                                 printf "${YELLOW}Installing ${tool}...${NC}\n"
@@ -38,9 +54,22 @@ check_requirements() {
                 fi
         done
         if [ -n "$missingWordlists" ]; then
-                printf "${YELLOW}Warning: The following wordlists/files are missing and some recon commands may fail: ${NC}${missingWordlists}\n"
+                printf "${YELLOW}Warning: The following wordlists/files are missing and some recon commands may fail:\n"
+                printf "${YELLOW}${NC}${missingWordlists}\n"
                 printf "${YELLOW}Would you like to attempt to download missing wordlists? [Y/n] ${NC}"
-                read downloadAns
+                
+                # Read with timeout (30 seconds)
+                downloadAns=""
+                timeout=30
+                while [ $timeout -gt 0 ] && [ -z "$downloadAns" ]; do
+                        if read -t 1 downloadAns 2>/dev/null; then
+                                break
+                        fi
+                        timeout=$((timeout - 1))
+                        printf "\033[2K\r${YELLOW}Would you like to attempt to download missing wordlists? [Y/n] (${timeout}s remaining): ${NC}"
+                done
+                printf "\n"
+                
                 if [ "${downloadAns}" = "Y" ] || [ "${downloadAns}" = "y" ] || [ -z "${downloadAns}" ]; then
                         for wordlist in $missingWordlists; do
                                 # Determine download URL and target directory
@@ -63,12 +92,21 @@ check_requirements() {
                                 esac
                                 if [ -n "$url" ]; then
                                         dir="$(dirname "$wordlist")"
-                                        [ ! -d "$dir" ] && mkdir -p "$dir"
+                                        if [ ! -d "$dir" ]; then
+                                                if ! mkdir -p "$dir" 2>/dev/null; then
+                                                        printf "${RED}Failed to create directory $dir${NC}\n"
+                                                        continue
+                                                fi
+                                        fi
                                         printf "${YELLOW}Downloading $wordlist...${NC}\n"
                                         if command -v curl >/dev/null 2>&1; then
-                                                curl -fsSL "$url" -o "$wordlist"
+                                                if ! curl -fsSL "$url" -o "$wordlist" 2>/dev/null; then
+                                                        printf "${RED}Failed to download $wordlist using curl${NC}\n"
+                                                fi
                                         elif command -v wget >/dev/null 2>&1; then
-                                                wget -q "$url" -O "$wordlist"
+                                                if ! wget -q "$url" -O "$wordlist" 2>/dev/null; then
+                                                        printf "${RED}Failed to download $wordlist using wget${NC}\n"
+                                                fi
                                         else
                                                 printf "${RED}Neither curl nor wget found. Cannot download $wordlist.${NC}\n"
                                         fi
@@ -100,11 +138,51 @@ origIFS="${IFS}"
 
 # Set default values for variables
 OUTPUTDIR="${OUTPUTDIR:-.}"
+
+# Validate OUTPUTDIR
+if [ -n "${OUTPUTDIR}" ]; then
+        # Check for dangerous characters in path
+        if echo "${OUTPUTDIR}" | grep -q -E '(\.\.|/|~|\$|`|;|\\)'; then
+                printf "${RED}Warning: OUTPUTDIR contains potentially dangerous characters. Using current directory instead.${NC}\n"
+                OUTPUTDIR="."
+        fi
+        # Check if it's a valid directory path
+        if [ ! -d "${OUTPUTDIR}" ] && [ ! -w "$(dirname "${OUTPUTDIR}" 2>/dev/null || echo ".")" ]; then
+                printf "${RED}Warning: Cannot write to OUTPUTDIR path. Using current directory instead.${NC}\n"
+                OUTPUTDIR="."
+        fi
+fi
 NMAPPATH="${NMAPPATH:-nmap}"
 kernel="$(uname)"
 subnet=""
 DNSSERVER=""
 DNSSERVER="${DNS:-${DNSSERVER}}"
+
+# Validate DNS server if provided
+if [ -n "${DNSSERVER}" ]; then
+        if ! expr "${DNSSERVER}" : '^\([0-9]\{1,3\}\.\)\{3\}[0-9]\{1,3\}$' >/dev/null; then
+                printf "${RED}Warning: Invalid DNS server format. Ignoring DNS server.${NC}\n"
+                DNSSERVER=""
+        else
+                # Validate DNS server IP
+                if ! echo "${DNSSERVER}" | awk -F. '{
+                        for(i=1;i<=4;i++) {
+                                if ($i < 0 || $i > 255 || $i ~ /[^0-9]/) {
+                                        exit 1
+                                }
+                        }
+                }'; then
+                        printf "${RED}Warning: Invalid DNS server IP. Ignoring DNS server.${NC}\n"
+                        DNSSERVER=""
+                fi
+        fi
+fi
+# Set DNSSTRING based on DNSSERVER
+if [ -n "${DNSSERVER}" ]; then
+        DNSSTRING="--dns-server ${DNSSERVER}"
+else
+        DNSSTRING=""
+fi
 osType="Unknown"
 pingable=false
 
@@ -137,7 +215,8 @@ while [ $# -gt 0 ]; do
                 printf "${GREEN}---------------------Recon Recommendations---------------------\n"
                 printf "${NC}\n"
 
-                IFS=""
+                IFS="
+"
 
                 # Set $ports and $file variables
                 if [ -f "nmap/Full_Extra_${HOST}.nmap" ]; then
@@ -374,21 +453,33 @@ while [ $# -gt 0 ]; do
 assignPorts() {
         # Set $commonPorts based on Port scan
         if [ -f "nmap/Port_$1.nmap" ]; then
-                commonPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_$1.nmap" | sed 's/.$//')"
+                if ! commonPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_$1.nmap" 2>/dev/null | sed 's/.$//' 2>/dev/null)"; then
+                        printf "${RED}Warning: Failed to parse Port_$1.nmap file${NC}\n"
+                        commonPorts=""
+                fi
         fi
 
         # Set $allPorts based on Full scan or both Port and Full scans
         if [ -f "nmap/Full_$1.nmap" ]; then
                 if [ -f "nmap/Port_$1.nmap" ]; then
-                        allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_$1.nmap" "nmap/Full_$1.nmap" | sed 's/.$//')"
+                        if ! allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_$1.nmap" "nmap/Full_$1.nmap" 2>/dev/null | sed 's/.$//' 2>/dev/null)"; then
+                                printf "${RED}Warning: Failed to parse Port_$1.nmap or Full_$1.nmap files${NC}\n"
+                                allPorts=""
+                        fi
                 else
-                        allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Full_$1.nmap" | sed 's/.$//')"
+                        if ! allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Full_$1.nmap" 2>/dev/null | sed 's/.$//' 2>/dev/null)"; then
+                                printf "${RED}Warning: Failed to parse Full_$1.nmap file${NC}\n"
+                                allPorts=""
+                        fi
                 fi
         fi
 
         # Set $udpPorts based on UDP scan
         if [ -f "nmap/UDP_$1.nmap" ]; then
-                udpPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/UDP_$1.nmap" | sed 's/.$//')"
+                if ! udpPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/UDP_$1.nmap" 2>/dev/null | sed 's/.$//' 2>/dev/null)"; then
+                        printf "${RED}Warning: Failed to parse UDP_$1.nmap file${NC}\n"
+                        udpPorts=""
+                fi
                 if [ "${udpPorts}" = "Al" ]; then
                         udpPorts=""
                 fi
@@ -447,7 +538,10 @@ progressBar() {
 # $1 is nmap command to be run, $2 is progress bar $refreshRate
 nmapProgressBar() {
         refreshRate="${2:-1}"
-        outputFile="$(echo $1 | sed -e 's/.*-oN \(.*\).nmap.*/\1/').nmap"
+        if ! outputFile="$(echo "$1" | sed -e 's/.*-oN \(.*\).nmap.*/\1/ 2>/dev/null).nmap"; then
+                printf "${RED}Warning: Failed to parse output file from nmap command${NC}\n"
+                return 1
+        fi
         tmpOutputFile="${outputFile}.tmp"
 
         # Run the nmap command
@@ -483,7 +577,23 @@ networkScan() {
         printf "${NC}\n"
 
         origHOST="${HOST}"
-        HOST="${urlIP:-$HOST}"
+        
+        # Set subnet for network scanning
+        if expr "${HOST}" : '^\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\)$' >/dev/null; then
+                # HOST is an IP address, extract subnet
+                subnet="$(echo "${HOST}" | sed 's/\.[0-9]*$/.0/')"
+        else
+                # HOST is a hostname, try to resolve it
+                resolvedIP="$(host "${HOST}" 2>/dev/null | awk '/has address/ {print $4; exit}')"
+                if [ -n "${resolvedIP}" ]; then
+                        subnet="$(echo "${resolvedIP}" | sed 's/\.[0-9]*$/.0/')"
+                        HOST="${resolvedIP}"
+                else
+                        printf "${RED}Could not resolve hostname ${HOST} to IP address${NC}\n"
+                        return 1
+                fi
+        fi
+        
         if [ "${kernel}" = "Linux" ]; then TW="W"; else TW="t"; fi
 
         if ! ${REMOTE}; then
@@ -495,7 +605,9 @@ networkScan() {
                                         return 1
                                 fi
                                 printf "${YELLOW}Found the following live hosts:${NC}\n\n"
-                                cat nmap/Network_${HOST}.nmap | grep -v '#' | grep "$(echo "${subnet}" | sed 's/..$//')" | awk {'print $5'}
+                                if ! cat "nmap/Network_${HOST}.nmap" 2>/dev/null | grep -v '#' | grep "$(echo "${subnet}" | sed 's/..$//')" | awk '{print $5}' 2>/dev/null; then
+                                        printf "${RED}Warning: Failed to display live hosts from Network_${HOST}.nmap${NC}\n"
+                                fi
         elif ${pingable}; then
                 # Discover live hosts with ping, limit background jobs for efficiency
                 echo >"nmap/Network_${HOST}.nmap"
@@ -508,8 +620,12 @@ networkScan() {
                         (ping -c 1 -${TW} 1 "$(echo "${subnet}" | sed 's/..$//').${ip}" 2>/dev/null | grep 'stat' -A1 | xargs | grep -v ', 0.*received' | awk {'print $2'} >>"nmap/Network_${HOST}.nmap") &
                 done
                 wait
-                sed -i '/^$/d' "nmap/Network_${HOST}.nmap"
-                sort -t . -k 3,3n -k 4,4n "nmap/Network_${HOST}.nmap"
+                if ! sed -i '/^$/d' "nmap/Network_${HOST}.nmap" 2>/dev/null; then
+                        printf "${RED}Warning: Failed to clean up Network_${HOST}.nmap file${NC}\n"
+                fi
+                if ! sort -t . -k 3,3n -k 4,4n "nmap/Network_${HOST}.nmap" 2>/dev/null; then
+                        printf "${RED}Warning: Failed to sort Network_${HOST}.nmap file${NC}\n"
+                fi
         else
                 printf "${YELLOW}No ping detected.. TCP Network Scan is not implemented yet in Remote mode.\n${NC}"
         fi
@@ -623,11 +739,14 @@ UDPScan() {
                 # Ensure UDP scan runs with root priviliges
                 if [ "${USER}" != 'root' ]; then
                         echo "UDP needs to be run as root, running with sudo..."
-                        sudo -v
+                        if ! sudo -v 2>/dev/null; then
+                                printf "${RED}Warning: Failed to validate sudo privileges for UDP scan${NC}\n"
+                                return 1
+                        fi
                         echo
                 fi
 
-                nmapProgressBar "sudo ${nmapType} -sU --max-retries 1 --open --open -oN nmap/UDP_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
+                nmapProgressBar "sudo ${nmapType} -sU --max-retries 1 --open -oN nmap/UDP_${HOST}.nmap ${HOST} ${DNSSTRING}" 3
                 assignPorts "${HOST}"
 
                 # Nmap version and default script scan on found UDP ports
@@ -637,10 +756,16 @@ UDPScan() {
                         printf "${YELLOW}Making a script scan on UDP ports: $(echo "${udpPorts}" | sed 's/,/, /g')\n"
                         printf "${NC}\n"
                         if [ -f /usr/share/nmap/scripts/vulners.nse ]; then
-                                sudo -v
+                                if ! sudo -v 2>/dev/null; then
+                                        printf "${RED}Warning: Failed to validate sudo privileges${NC}\n"
+                                        return 1
+                                fi
                                 nmapProgressBar "sudo ${nmapType} -sCVU --script vulners --script-args mincvss=7.0 -p${udpPorts} --open -oN nmap/UDP_Extra_${HOST}.nmap ${HOST} ${DNSSTRING}" 2
                         else
-                                sudo -v
+                                if ! sudo -v 2>/dev/null; then
+                                        printf "${RED}Warning: Failed to validate sudo privileges${NC}\n"
+                                        return 1
+                                fi
                                 nmapProgressBar "sudo ${nmapType} -sCVU -p${udpPorts} --open -oN nmap/UDP_Extra_${HOST}.nmap ${HOST} ${DNSSTRING}" 2
                         fi
                 else
@@ -776,8 +901,17 @@ recon() {
 "
 
         # Run reconRecommend()
-        reconRecommend "${HOST}" | tee "nmap/Recon_${HOST}.nmap"
-        allRecon="$(grep "${HOST}" "nmap/Recon_${HOST}.nmap" | cut -d " " -f 1 | sort | uniq)"
+        if ! reconRecommend "${HOST}" | tee "nmap/Recon_${HOST}.nmap" 2>/dev/null; then
+                printf "${RED}Warning: Failed to generate recon recommendations${NC}\n"
+                return 1
+        fi
+        if ! allRecon="$(grep "${HOST}" "nmap/Recon_${HOST}.nmap" 2>/dev/null | cut -d " " -f 1 | sort | uniq 2>/dev/null)"; then
+                printf "${RED}Warning: Failed to parse recon recommendations${NC}\n"
+                return 1
+        fi
+
+        # Reset missingTools for this recon session
+        missingTools=""
 
         # Detect any missing tools
         for tool in ${allRecon}; do
@@ -800,6 +934,7 @@ recon() {
 
         secs=30
         count=0
+        reconCommand=""
 
         # Ask user for which recon tools to run, default to All if no answer is detected in 30s
         if [ -n "${availableRecon}" ]; then
@@ -813,6 +948,13 @@ recon() {
                                 # Waits 1 second for user's input - POSIX read -t
                                 reconCommand="$(sh -c '{ { sleep 1; kill -sINT $$; } & }; exec head -n 1')"
                                 count=$((count + 1))
+                                # Validate reconCommand to prevent command injection
+                                if [ -n "${reconCommand}" ]; then
+                                        if echo "${reconCommand}" | grep -q -E '[;|&`$\\]'; then
+                                                printf "${RED}Warning: Invalid characters in command. Ignoring input.${NC}\n"
+                                                reconCommand=""
+                                        fi
+                                fi
                                 [ -n "${reconCommand}" ] && break
                         done
                         if expr "${reconCommand}" : '^\([Aa]ll\)$' >/dev/null || [ -z "${reconCommand}" ]; then
@@ -851,31 +993,52 @@ runRecon() {
         IFS="
 "
 
-        mkdir -p recon/
+        mkdir -p recon/ 2>/dev/null || {
+                printf "${RED}Warning: Failed to create recon directory${NC}\n"
+                return 1
+        }
 
         if [ "$2" = "All" ]; then
-                reconCommands="$(grep "${HOST}" "nmap/Recon_${HOST}.nmap")"
+                if ! reconCommands="$(grep "${HOST}" "nmap/Recon_${HOST}.nmap" 2>/dev/null)"; then
+                        printf "${RED}Warning: Failed to read recon commands from Recon_${HOST}.nmap${NC}\n"
+                        return 1
+                fi
         else
-                reconCommands="$(grep "${HOST}" "nmap/Recon_${HOST}.nmap" | grep "$2")"
+                if ! reconCommands="$(grep "${HOST}" "nmap/Recon_${HOST}.nmap" 2>/dev/null | grep "$2" 2>/dev/null)"; then
+                        printf "${RED}Warning: Failed to read specific recon commands from Recon_${HOST}.nmap${NC}\n"
+                        return 1
+                fi
         fi
 
         # Run each line
         for line in ${reconCommands}; do
                 currentScan="$(echo "${line}" | cut -d ' ' -f 1)"
                 fileName="$(echo "${line}" | awk -F "recon/" '{print $2}')"
-                if [ -n "${fileName}" ] && [ ! -f recon/"${fileName}" ]; then
+                if [ -n "${fileName}" ] && [ ! -f "recon/${fileName}" ]; then
                         printf "${NC}\n"
                         printf "${YELLOW}Starting ${currentScan} scan\n"
                         printf "${NC}\n"
-                                                eval "${line}"
-                                                scanStatus=$?
-                                                if [ $scanStatus -ne 0 ]; then
-                                                        printf "${RED}Warning: ${currentScan} scan failed with exit code $scanStatus${NC}\n"
-                                                fi
-                                                printf "${NC}\n"
-                                                printf "${YELLOW}Finished ${currentScan} scan\n"
-                                                printf "${NC}\n"
-                                                printf "${YELLOW}=========================\n"
+                        
+                        # Validate command before execution (basic security check)
+                        if echo "${line}" | grep -q -E "(rm|rmdir|del|format|mkfs|dd|>|wget|curl).*("; then
+                                printf "${RED}Warning: Potentially dangerous command detected, skipping: ${line}${NC}\n"
+                                continue
+                        fi
+                        
+                        # Execute the command safely
+                        if eval "${line}"; then
+                                scanStatus=0
+                        else
+                                scanStatus=$?
+                        fi
+                        
+                        if [ $scanStatus -ne 0 ]; then
+                                printf "${RED}Warning: ${currentScan} scan failed with exit code $scanStatus${NC}\n"
+                        fi
+                        printf "${NC}\n"
+                        printf "${YELLOW}Finished ${currentScan} scan\n"
+                        printf "${NC}\n"
+                        printf "${YELLOW}=========================\n"
                 fi
         done
 
@@ -984,21 +1147,68 @@ if [ -z "${TYPE}" ] || [ -z "${HOST}" ]; then
 fi
 
 # Ensure $HOST is an IP or a URL
-if ! expr "${HOST}" : '^\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\)$' >/dev/null && ! expr "${HOST}" : '^\(\([[:alnum:]-]\{1,63\}\.\)*[[:alpha:]]\{2,6\}\)$' >/dev/null; then
+if ! expr "${HOST}" : '^\([0-9]\{1,3\}\.\)\{3\}[0-9]\{1,3\}$' >/dev/null && ! expr "${HOST}" : '^\(\([[:alnum:]-]\{1,63\}\.\)*[[:alpha:]]\{2,6\}\)$' >/dev/null; then
         printf "${RED}\n"
-        printf "${RED}Invalid IP or URL!\n"
+        printf "${RED}Invalid IP or URL format!\n"
+        printf "${RED}IP should be in format: xxx.xxx.xxx.xxx\n"
+        printf "${RED}Hostname should be a valid domain name\n"
         usage
+fi
+
+# Additional validation for IP addresses
+if expr "${HOST}" : '^\([0-9]\{1,3\}\.\)\{3\}[0-9]\{1,3\}$' >/dev/null; then
+        # Validate each octet is between 0-255
+        if ! echo "${HOST}" | awk -F. '{
+                for(i=1;i<=4;i++) {
+                        if ($i < 0 || $i > 255 || $i ~ /[^0-9]/) {
+                                exit 1
+                        }
+                }
+        }'; then
+                printf "${RED}\n"
+                printf "${RED}Invalid IP address! Each octet must be between 0-255.\n"
+                usage
+        fi
 fi
 
 # Ensure selected scan type is among available choices, then run the selected scan
 case "${TYPE}" in
-[Nn]etwork | [Pp]ort | [Ss]cript | [Ff]ull | UDP | udp | [Vv]ulns | [Rr]econ | [Aa]ll)
-        mkdir -p "${OUTPUTDIR}" && cd "${OUTPUTDIR}" && mkdir -p nmap/ || usage
-        main | tee "nmapAutomator_${HOST}_${TYPE}.txt"
-        ;;
-*)
-        printf "${RED}\n"
-        printf "${RED}Invalid Type!\n"
-        usage
-        ;;
+        [Nn]etwork|[Nn]et) TYPE="Network" ;;
+        [Pp]ort) TYPE="Port" ;;
+        [Ss]cript|[Ss]can) TYPE="Script" ;;
+        [Ff]ull) TYPE="Full" ;;
+        [Uu]dp|[Uu]dpscan) TYPE="UDP" ;;
+        [Vv]ulns|[Vv]uln|[Vv]ulnerability) TYPE="Vulns" ;;
+        [Rr]econ|[Rr]econn|[Rr]econaissance) TYPE="Recon" ;;
+        [Aa]ll|[Aa]llscan) TYPE="All" ;;
+        *)
+                printf "${RED}\n"
+                printf "${RED}Invalid scan type: ${TYPE}\n"
+                printf "${RED}Available types: Network, Port, Script, Full, UDP, Vulns, Recon, All\n"
+                usage
+                ;;
+esac
+
+# Now run the scan with validated type
+case "${TYPE}" in
+        Network|Port|Script|Full|UDP|Vulns|Recon|All)
+                mkdir -p "${OUTPUTDIR}" && cd "${OUTPUTDIR}" && mkdir -p nmap/ || usage
+        
+                # Check if host is pingable and set nmapType accordingly
+                pingResult="$(checkPing "${HOST}")"
+                nmapType="$(echo "${pingResult}" | head -n 1)"
+                if [ "$(echo "${pingResult}" | wc -l)" -gt 1 ]; then
+                        pingable=true
+                        ttl="$(echo "${pingResult}" | tail -n 1)"
+                else
+                        pingable=false
+                fi
+                
+                main | tee "nmapAutomator_${HOST}_${TYPE}.txt"
+                ;;
+        *)
+                printf "${RED}\n"
+                printf "${RED}Invalid Type!\n"
+                usage
+                ;;
 esac
