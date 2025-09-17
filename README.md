@@ -133,18 +133,7 @@ Scan Types:
 - Recon recommendations now include NetExec and many more protocols.
 
 ## Upcoming Features
-- [x] Support URL/DNS - Thanks @KatsuragiCSL
-- [x] Add extensions fuzzing for http recon
-- [x] Add an nmap progress bar
-- [x] List missing tools in recon
-- [x] Add option to change output folder
-- [x] Save full script output to a file
-- [x] Improve performance and efficiency of the script - Thanks @caribpa
-- [x] Make nmapAutomater 100% POSIX compatible. - Massive Thanks to @caribpa
-- [x] Add network scanning type, so nmapAutomator can discover live hosts on the network.
-- [ ] Enable usage of multiple scan types in one scan.
-- [ ] Enable scanning of multiple hosts in one scan.
-- [ ] Fully implement Remote Mode on all scans
+
 
 **Feel free to send your pull requests :)**  
 *For any pull requests, please try to follow these [Contributing Guidelines](CONTRIBUTING.md).*
