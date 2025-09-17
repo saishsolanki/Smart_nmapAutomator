@@ -1,4 +1,4 @@
-# nmapAutomator
+# Smart_nmapAutomator
 
 A script you can run in the background!
   
